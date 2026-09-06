@@ -1,0 +1,12 @@
+python-dotenv
+fastapi
+uvicorn[standard]
+sqlalchemy
+pydantic
+langchain
+langchain-google-genai
+langchain-openai
+langchain-groq
+rank_bm25
+pytest
+ruff

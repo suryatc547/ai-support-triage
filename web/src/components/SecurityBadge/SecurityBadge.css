@@ -1,0 +1,58 @@
+.security-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.security-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: currentColor;
+  flex-shrink: 0;
+}
+
+.security-badge-score {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+  opacity: 0.9;
+}
+
+/* Quarantined: strong, attention-grabbing */
+.security-badge-quarantined {
+  background-color: rgba(225, 29, 72, 0.14);
+  color: #e11d48;
+}
+
+[data-theme='dark'] .security-badge-quarantined {
+  background-color: rgba(251, 113, 133, 0.16);
+  color: #fda4af;
+}
+
+.security-badge-quarantined .security-badge-score {
+  background-color: rgba(225, 29, 72, 0.2);
+}
+
+/* Flagged: amber warning */
+.security-badge-flagged {
+  background-color: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+}
+
+[data-theme='dark'] .security-badge-flagged {
+  background-color: rgba(251, 191, 36, 0.14);
+  color: #fcd34d;
+}
+
+.security-badge-flagged .security-badge-score {
+  background-color: rgba(245, 158, 11, 0.2);
+}

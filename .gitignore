@@ -1,0 +1,87 @@
+# ============================================================
+# Environment & Secrets
+# ============================================================
+.env
+.env.*
+*.env
+!.env.example
+
+# ============================================================
+# Python / Backend (api/)
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Distribution / packaging
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# Ruff cache
+.ruff_cache/
+
+# Pytest
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+
+# SQLite database files
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================================
+# Node.js / Frontend (web/)
+# ============================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Vite build output
+web/dist/
+web/.vite/
+
+# pnpm
+.pnpm-store/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# ============================================================
+# IDE & Editor
+# ============================================================
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ============================================================
+# Logs
+# ============================================================
+logs/
+*.log
