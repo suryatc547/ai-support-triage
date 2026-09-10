@@ -33,7 +33,8 @@ SUPPORT_STAFF = [
         "email": "hr@test.com",
         "department": "Human Resources",
         "expertise": (
-            "Employee onboarding, offboarding, profile updates, ID card, leave requests, "
+            "Employee onboarding, welcome kits, onboarding parcels, courier delivery damages, "
+            "offboarding, profile updates, ID card, leave requests, "
             "payroll queries, salary, benefits enrollment, medical insurance, training programs, "
             "policy clarifications, contract amendments, performance reviews, job transfers, "
             "resignation, termination, employee handbook, attendance"
@@ -68,17 +69,45 @@ def seed():
     init_db()
     db = SessionLocal()
     try:
-        existing_emails = {u.email for u in db.query(User.email).all()}
         added = 0
+        updated = 0
         for staff in SUPPORT_STAFF:
-            if staff["email"] not in existing_emails:
+            email = staff["email"]
+            user = (
+                db.query(User)
+                .filter(
+                    (User.department == staff["department"])
+                    | (User.name == staff["name"])
+                    | (User.email == email)
+                )
+                .first()
+            )
+            if user:
+                changed = False
+                if user.email != email:
+                    user.email = email
+                    changed = True
+                if user.expertise != staff["expertise"]:
+                    user.expertise = staff["expertise"]
+                    changed = True
+                if user.department != staff["department"]:
+                    user.department = staff["department"]
+                    changed = True
+                if user.name != staff["name"]:
+                    user.name = staff["name"]
+                    changed = True
+
+                if changed:
+                    updated += 1
+                    print(f"  * Updated: {staff['name']} <{email}>")
+                else:
+                    print(f"  - Unchanged: {staff['name']} <{email}>")
+            else:
                 db.add(User(**staff))
                 added += 1
-                print(f"  + Added: {staff['name']} <{staff['email']}>")
-            else:
-                print(f"  - Skipped (already exists): {staff['email']}")
+                print(f"  + Added: {staff['name']} <{email}>")
         db.commit()
-        print(f"\nSeeding complete. {added} new user(s) added.")
+        print(f"\nSeeding complete. {added} added, {updated} updated.")
     finally:
         db.close()
 

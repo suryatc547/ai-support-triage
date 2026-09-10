@@ -13,8 +13,11 @@ It is strictly best-effort and one-directional:
 """
 
 import json
+import logging
 
 from . import rag
+
+logger = logging.getLogger(__name__)
 
 
 def _refine_prompt() -> str:
@@ -30,14 +33,22 @@ def _refine_prompt() -> str:
     )
 
 
-def analyze_suspicious(subject: str, body: str, sender_email: str) -> bool:
+def analyze_suspicious(
+    subject: str,
+    body: str,
+    sender_email: str,
+    providers: list[rag.LLMProvider] | None = None,
+) -> bool:
     """Return True if the LLM believes the mail is a phishing/social-engineering attempt.
 
     Best-effort: returns False (safe) on any provider failure so the
     deterministic guardrail verdict stands.
+
+    :param providers: Optional provider chain. Defaults to ``rag.select_llm()``.
     """
-    providers = rag.select_llm()
+    providers = providers if providers is not None else rag.select_llm()
     if not providers:
+        logger.debug("No LLM provider configured; skipping LLM security refinement")
         return False
 
     messages = [
@@ -58,13 +69,20 @@ def analyze_suspicious(subject: str, body: str, sender_email: str) -> bool:
                 content = content[3:].rstrip("` \n")
             parsed = json.loads(content)
             return bool(parsed.get("suspicious", False))
-        except Exception:  # noqa: BLE001 - best-effort, never block on LLM
+        except Exception as e:  # noqa: BLE001 - best-effort, never block on LLM
+            logger.warning("Security LLM %s failed: %s", rag.provider_label(llm), e)
             continue
 
     return False
 
 
-def refine_result(result, subject: str, body: str, sender_email: str):
+def refine_result(
+    result,
+    subject: str,
+    body: str,
+    sender_email: str,
+    providers: list[rag.LLMProvider] | None = None,
+):
     """Return a refined validation result, escalating a `flag` to `quarantine`
     if the LLM judges the mail suspicious.
 
@@ -78,7 +96,7 @@ def refine_result(result, subject: str, body: str, sender_email: str):
         return result
 
     try:
-        suspicious = analyze_suspicious(subject, body, sender_email)
+        suspicious = analyze_suspicious(subject, body, sender_email, providers=providers)
     except Exception:  # noqa: BLE001 - best-effort
         return result
 
@@ -92,6 +110,7 @@ def refine_result(result, subject: str, body: str, sender_email: str):
             "LLM classified the email as a likely phishing/social-engineering attempt.",
         )
     ]
+    logger.warning("LLM flagged mail as suspicious; escalated flag -> quarantine")
     return ValidationResult(
         verdict="quarantine",
         score=result.score + 60,

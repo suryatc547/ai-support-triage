@@ -1,7 +1,7 @@
 # Finance & Procurement Support — Routing Policy
 
 ## Team: Admin Team
-**Contact:** admin@test.com
+**Contact:** {{contact_email}}
 **Department:** Finance & Procurement
 
 ## Scope of Support

@@ -4,9 +4,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .controllers.ticket_controller import router as ticket_router
+from .logging_config import setup_logging
+from .middleware import APIKeyMiddleware, TraceIdMiddleware
 from .models import database
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(name)s: %(message)s")
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -19,5 +21,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Support Ticket API", lifespan=lifespan)
+
+# Note: Starlette nests middleware so the *last* added runs outermost. Adding
+# TraceIdMiddleware after APIKeyMiddleware keeps it outermost so even 401s are
+# traceable.
+app.add_middleware(APIKeyMiddleware)
+app.add_middleware(TraceIdMiddleware)
 
 app.include_router(ticket_router)

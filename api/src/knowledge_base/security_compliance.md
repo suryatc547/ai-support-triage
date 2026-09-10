@@ -1,7 +1,7 @@
 # Security & Compliance — Routing Policy
 
 ## Team: Security Team
-**Contact:** security@test.com
+**Contact:** {{contact_email}}
 **Department:** Security & Compliance
 
 ## Scope of Support

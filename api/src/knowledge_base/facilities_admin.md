@@ -1,7 +1,7 @@
 # Facilities & Admin — Routing Policy
 
 ## Team: Facilities Team
-**Contact:** facilities@test.com
+**Contact:** {{contact_email}}
 **Department:** Facilities & Admin
 
 ## Scope of Support

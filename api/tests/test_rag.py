@@ -15,6 +15,8 @@ from src.services.rag import (
     _clean_llm_result,
     _fallback_bm25,
     _match_kb_doc_to_user,
+    _tokenize,
+    process_ticket_via_rag,
 )
 
 # Team IDs mirrored from the seeded staff: 1=Admin, 2=IT, 3=HR, 4=Security, 5=Facilities
@@ -281,3 +283,143 @@ def _load_kb_docs():
     from src.services.rag import _load_knowledge_base_docs
 
     return _load_knowledge_base_docs()
+
+
+# --- process_ticket_via_rag with injected providers -------------------------
+
+
+class FakeResponse:
+    def __init__(self, content: str):
+        self.content = content
+
+
+class FakeProvider:
+    """Lightweight structural stand-in for an LLM provider (Dependency Inversion)."""
+
+    def __init__(self, content: str = "", fails: bool = False):
+        self.content = content
+        self.fails = fails
+        self.calls = 0
+
+    def invoke(self, messages):
+        self.calls += 1
+        if self.fails:
+            raise RuntimeError("provider exploded")
+        return FakeResponse(self.content)
+
+
+class FakeQuery:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def all(self):
+        return self.rows
+
+
+class FakeDB:
+    """Fake session exposing just the ``query`` surface process_ticket_via_rag uses."""
+
+    def __init__(self, users):
+        self._users = users
+
+    def query(self, model):
+        return FakeQuery(self._users)
+
+
+def test_process_ticket_via_rag_uses_injected_provider(users):
+    provider = FakeProvider(f'{{"category": "finance", "assignee_id": {ADMIN}}}')
+    result = process_ticket_via_rag(
+        "Invoice approval", "Please approve invoice #44", FakeDB(users), providers=[provider]
+    )
+    assert provider.calls == 1
+    assert result == {"category": "finance", "assignee_id": ADMIN}
+
+
+def test_process_ticket_via_rag_sanitises_injected_provider_output(users):
+    provider = FakeProvider('{"category": "  FINANCE ", "assignee_id": "not-an-int"}')
+    result = process_ticket_via_rag("Invoice", "Approve this", FakeDB(users), providers=[provider])
+    assert result == {"category": "finance", "assignee_id": None}
+
+
+def test_process_ticket_via_rag_unassigned_when_provider_fails(users):
+    provider = FakeProvider(fails=True)
+    result = process_ticket_via_rag("Help", "Laptop broken", FakeDB(users), providers=[provider])
+    assert result == {"category": "unclassified", "assignee_id": None}
+
+
+def test_kb_docs_placeholder_resolution(users):
+    from src.services.rag import _load_knowledge_base_docs
+
+    docs = _load_knowledge_base_docs(users)
+    assert len(docs) > 0
+    for doc in docs:
+        assert "{{contact_email}}" not in doc.page_content
+        assert "{{STAFF_DOMAIN}}" not in doc.page_content
+
+
+def test_kb_doc_matches_user_with_custom_email_domain():
+    from src.services.rag import _load_knowledge_base_docs
+
+    custom_users = [
+        SimpleNamespace(
+            id=99,
+            name="IT Admin",
+            email="custom-it@enterprise.internal",
+            department="IT Support",
+            expertise="hardware",
+        )
+    ]
+    docs = _load_knowledge_base_docs(custom_users)
+    it_doc = next(d for d in docs if "IT Support" in d.page_content)
+    assert "custom-it@enterprise.internal" in it_doc.page_content
+
+    matched = _match_kb_doc_to_user(custom_users, it_doc)
+    assert matched is not None
+    assert matched.id == 99
+
+
+def test_new_department_without_code_changes():
+    """Verify that a brand new department added purely in DB works dynamically."""
+    from langchain_core.documents import Document
+
+    new_user = SimpleNamespace(
+        id=42,
+        name="Legal Team",
+        email="legal@custom-domain.com",
+        department="Legal & Compliance",
+        expertise="Review vendor contracts, NDAs, and corporate governance policies",
+    )
+    doc_content = (
+        "# Legal Routing Policy\n\n"
+        "## Team: Legal Team\n"
+        "**Department:** Legal & Compliance\n"
+        "**Contact:** {{contact_email}}\n\n"
+        "Handle contracts and NDAs."
+    )
+    doc = Document(page_content=doc_content)
+    matched = _match_kb_doc_to_user([new_user], doc)
+    assert matched is not None
+    assert matched.id == 42
+    assert matched.email == "legal@custom-domain.com"
+
+
+def test_tokenize_strips_punctuation():
+    """Verify that _tokenize strips punctuation so trailing commas/periods match."""
+    tokens = _tokenize("Hello, welcome! Here are packages, parcels, and kits.")
+    assert "welcome" in tokens
+    assert "welcome," not in tokens
+    assert "packages" in tokens
+    assert "parcels" in tokens
+    assert "kits" in tokens
+
+
+def test_routes_welcome_kit_parcel_damage_to_hr(users):
+    """Verify welcome kit and parcel damage routes to HR via fallback BM25."""
+    assert (
+        route(
+            users,
+            "General Query",
+            "I received my welcome kits today. However the parcel has minor damages.",
+        )
+        == HR
+    )

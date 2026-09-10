@@ -33,3 +33,12 @@ pnpm lint
 # 4. Production Build (tsc -b && vite build)
 pnpm build
 ```
+
+---
+
+## 🔐 API Key
+
+If the backend has API authentication enabled (`API_KEY` in its env), set
+`VITE_API_KEY` in `web/.env` to the same value and the app will attach an
+`X-API-Key` header to every request automatically. Without it the app talks to
+the backend anonymously (fine when the backend runs without an API key).
