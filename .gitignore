@@ -30,12 +30,19 @@ build/
 
 # Ruff cache
 .ruff_cache/
+api/.ruff_cache/
+modelm/.ruff_cache/
 
-# Pytest
+# Pytest & Coverage
 .pytest_cache/
+api/.pytest_cache/
+modelm/.pytest_cache/
 htmlcov/
 .coverage
+.coverage.*
 coverage.xml
+junit.xml
+test-results/
 
 # Type checking
 .mypy_cache/
@@ -43,8 +50,30 @@ coverage.xml
 
 # SQLite database files
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 *.sqlite
 *.sqlite3
+
+# ============================================================
+# Local Model & ML Artifacts (modelm/)
+# ============================================================
+# NOTE: modelm/weights.json and modelm/metrics.json are INTENTIONALLY TRACKED —
+# they are small, re-training only needs a few seconds, and committing them makes
+# the shipped classifier reproducible without a training step at deploy time.
+# Only heavy or throwaway model artifacts are ignored below.
+# Ignore heavy weights, raw checkpoints, ONNX/PyTorch models if tested
+*.pt
+*.pth
+*.bin
+*.onnx
+*.safetensors
+*.ckpt
+modelm/checkpoints/
+modelm/cache/
+modelm/tmp/
+modelm/*_checkpoint.json
 
 # ============================================================
 # Node.js / Frontend (web/)
@@ -58,6 +87,7 @@ pnpm-debug.log*
 # Vite build output
 web/dist/
 web/.vite/
+.vite/
 
 # pnpm
 .pnpm-store/
@@ -66,10 +96,14 @@ web/.vite/
 *.tsbuildinfo
 
 # ============================================================
-# IDE & Editor
+# IDE, Editor & Scratch Files
 # ============================================================
 .vscode/
 .idea/
+.cursor/
+.windsurf/
+.agents/
+scratch/
 *.suo
 *.ntvs*
 *.njsproj
@@ -79,6 +113,8 @@ web/.vite/
 *.swo
 .DS_Store
 Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
 
 # ============================================================
 # Logs

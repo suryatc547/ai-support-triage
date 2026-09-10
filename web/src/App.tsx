@@ -14,6 +14,10 @@ const MIN_LOADER_MS = 250;
 // How long to wait after triggering a background sync before re-fetching, and
 // how long to keep the Sync button in its "syncing" state.
 const SYNC_REFRESH_MS = 3000;
+// Attach the API key to every request when the backend has auth enabled
+// (set VITE_API_KEY to match the server's API_KEY / API_KEYS).
+const apiKey = import.meta.env.VITE_API_KEY as string | undefined;
+const authHeaders: HeadersInit = apiKey ? { 'X-API-Key': apiKey } : {};
 
 function App() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -49,7 +53,9 @@ function App() {
         if (security && security !== 'all') {
           params.set('security', security);
         }
-        const response = await fetch(`/api/tickets?${params.toString()}`);
+        const response = await fetch(`/api/tickets?${params.toString()}`, {
+          headers: authHeaders,
+        });
         if (!response.ok) {
           throw new Error(`Failed to load tickets (status ${response.status})`);
         }
@@ -97,7 +103,7 @@ function App() {
   const triggerSync = async () => {
     setSyncing(true);
     try {
-      const response = await fetch('/api/sync', { method: 'POST' });
+      const response = await fetch('/api/sync', { method: 'POST', headers: authHeaders });
       if (!response.ok) {
         console.error('Sync failed with status', response.status);
         return;

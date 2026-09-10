@@ -8,5 +8,6 @@ langchain-google-genai
 langchain-openai
 langchain-groq
 rank_bm25
+numpy
 pytest
 ruff

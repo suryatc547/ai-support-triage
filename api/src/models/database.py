@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from .models import Base
@@ -9,6 +9,34 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 SQLALCHEMY_DATABASE_URL = f"sqlite:///{(_REPO_ROOT / 'support.db').as_posix()}"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Milliseconds a connection waits for a locked database before giving up.
+_BUSY_TIMEOUT_MS = 5000
+
+
+def _apply_sqlite_pragmas(dbapi_connection, connection_record):
+    """Configure per-connection SQLite pragmas for safe concurrent access.
+
+    By default SQLite does not enforce foreign keys and fails fast (rather
+    than waiting) when the database is locked. These pragmas harden those
+    defaults at the connection level:
+
+    - ``foreign_keys=ON``: the ``assigned_to`` FK is actually enforced.
+    - ``busy_timeout``: wait up to 5s for a busy database instead of raising
+      ``database is locked`` immediately.
+    - ``journal_mode=WAL``: allows concurrent readers with a single writer,
+      which matters once the API and the IMAP sync access the same file.
+    """
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+        cursor.execute("PRAGMA journal_mode=WAL")
+    finally:
+        cursor.close()
+
+
+event.listen(engine, "connect", _apply_sqlite_pragmas)
 
 
 def _run_lightweight_migrations():

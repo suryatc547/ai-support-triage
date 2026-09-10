@@ -1,0 +1,87 @@
+{
+  "timestamp": "2026-09-09T19:19:47.200783+00:00",
+  "total_samples": 460,
+  "train_samples": 367,
+  "val_samples": 93,
+  "vocab_size": 5437,
+  "categories": [
+    "facilities_admin",
+    "finance_procurement",
+    "human_resources",
+    "it_support",
+    "security_compliance"
+  ],
+  "accuracy": 0.8602,
+  "macro_precision": 0.8652,
+  "macro_recall": 0.8605,
+  "macro_f1": 0.8567,
+  "per_class": {
+    "facilities_admin": {
+      "precision": 0.8421,
+      "recall": 0.8889,
+      "f1_score": 0.8649,
+      "support": 18
+    },
+    "finance_procurement": {
+      "precision": 0.7,
+      "recall": 0.9333,
+      "f1_score": 0.8,
+      "support": 15
+    },
+    "human_resources": {
+      "precision": 0.913,
+      "recall": 0.913,
+      "f1_score": 0.913,
+      "support": 23
+    },
+    "it_support": {
+      "precision": 0.9333,
+      "recall": 0.7778,
+      "f1_score": 0.8485,
+      "support": 18
+    },
+    "security_compliance": {
+      "precision": 0.9375,
+      "recall": 0.7895,
+      "f1_score": 0.8571,
+      "support": 19
+    }
+  },
+  "confusion_matrix": {
+    "facilities_admin": {
+      "facilities_admin": 16,
+      "finance_procurement": 0,
+      "human_resources": 1,
+      "it_support": 0,
+      "security_compliance": 1
+    },
+    "finance_procurement": {
+      "facilities_admin": 0,
+      "finance_procurement": 14,
+      "human_resources": 1,
+      "it_support": 0,
+      "security_compliance": 0
+    },
+    "human_resources": {
+      "facilities_admin": 0,
+      "finance_procurement": 2,
+      "human_resources": 21,
+      "it_support": 0,
+      "security_compliance": 0
+    },
+    "it_support": {
+      "facilities_admin": 3,
+      "finance_procurement": 1,
+      "human_resources": 0,
+      "it_support": 14,
+      "security_compliance": 0
+    },
+    "security_compliance": {
+      "facilities_admin": 0,
+      "finance_procurement": 3,
+      "human_resources": 0,
+      "it_support": 1,
+      "security_compliance": 15
+    }
+  }
+}

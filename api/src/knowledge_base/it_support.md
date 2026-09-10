@@ -1,7 +1,7 @@
 # IT Support — Routing Policy
 
 ## Team: IT Admin
-**Contact:** it-admin@test.com
+**Contact:** {{contact_email}}
 **Department:** IT Support
 
 ## Scope of Support

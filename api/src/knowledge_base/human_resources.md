@@ -1,14 +1,14 @@
 # Human Resources — Routing Policy
 
 ## Team: HR Team
-**Contact:** hr@test.com
+**Contact:** {{contact_email}}
 **Department:** Human Resources
 
 ## Scope of Support
 
 Route any ticket to the HR Team when the email contains topics related to:
 
-- **Onboarding**: New employee welcome, first day instructions, access setup requests from HR, documentation submission.
+- **Onboarding**: New employee welcome, welcome kits, onboarding parcels, courier delivery damages, replacement welcome kits, first day instructions, access setup requests from HR, documentation submission.
 - **Offboarding**: Resignation processing, exit interviews, equipment return, final pay, relieving letters.
 - **Profile Updates**: Name change, address update, emergency contact, bank account details update.
 - **Leave & Attendance**: Leave application, leave balance queries, attendance correction, work-from-home approvals.
@@ -28,4 +28,6 @@ Route **immediately** if the email contains:
 ## Keywords
 
 onboarding, offboarding, joining, resignation, leave, payroll, salary, benefits,
-insurance, training, policy, HR, ID card, attendance, profile, transfer, appraisal
+insurance, training, policy, HR, ID card, attendance, profile, transfer, appraisal,
+welcome kit, welcome kits, parcel, parcel damage, delivery damage, onboarding kit
+

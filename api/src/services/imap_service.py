@@ -4,8 +4,10 @@ import json
 import logging
 from email.policy import default
 
-from ..configs.config import imap_config
+from ..configs.config import email_forwarding_enabled, imap_config
+from ..logging_config import new_trace_id, trace_context
 from ..models import database, models
+from .email_service import forward_ticket_email
 from .mail_analyzer import is_support_email
 from .rag import process_ticket_via_rag
 from .security_analyzer import refine_result
@@ -34,6 +36,20 @@ def _findings_to_json(findings) -> str:
 
 
 def fetch_and_process_emails():
+    """Run one IMAP sync, tagging every log line with a `sync-*` trace ID.
+
+    Background tasks spawned by the API do not inherit the HTTP request trace
+    context, so each sync run generates its own ID to keep the whole
+    pipeline — fetch, validation, analyser, RAG, persistence — traceable.
+    """
+    run_id = new_trace_id("sync")
+    logger.info("START IMAP sync run %s", run_id)
+    with trace_context(run_id):
+        _run_imap_sync()
+    logger.info("END IMAP sync run %s", run_id)
+
+
+def _run_imap_sync():
     """Fetch unread emails and persist the resulting tickets.
 
     Each message is first run through a lightweight pre-LLM analyzer:
@@ -65,6 +81,9 @@ def fetch_and_process_emails():
         mail_ids = data[0].split()
 
         db = database.SessionLocal()
+
+        counts = {"processed": 0, "forwarded": 0, "forward_failed": 0, "forward_skipped": 0}
+        logger.info("Sync starting: %d unread message(s)", len(mail_ids))
 
         for m_id in mail_ids:
             try:
@@ -164,6 +183,25 @@ def fetch_and_process_emails():
 
                 db.add(ticket)
                 db.commit()
+                db.refresh(ticket)
+                counts["processed"] += 1
+
+                # Forward email to the assigned department if assigned. Gated by
+                # EMAIL_FORWARDING so a dev IMAP-only setup never sends mail by
+                # default; misses are counted (and logged) but never fatal.
+                if ticket.assigned_to and email_forwarding_enabled:
+                    assignee = (
+                        db.query(models.User).filter(models.User.id == ticket.assigned_to).first()
+                    )
+                    if assignee:
+                        if forward_ticket_email(ticket, assignee):
+                            counts["forwarded"] += 1
+                        else:
+                            counts["forward_failed"] += 1
+                    else:
+                        counts["forward_skipped"] += 1
+                elif ticket.assigned_to:
+                    counts["forward_skipped"] += 1
 
                 # Processing succeeded — mark the message as read so it is not
                 # re-fetched on a subsequent sync.
@@ -179,6 +217,15 @@ def fetch_and_process_emails():
                 # Do NOT mark the message as read; it will be retried next sync.
                 db.rollback()
                 logger.exception("Failed to process mail %s, leaving unread", m_id)
+
+        logger.info(
+            "Sync complete: %d processed, %d forwarded, %d failed, %d skipped (forwarding=%s)",
+            counts["processed"],
+            counts["forwarded"],
+            counts["forward_failed"],
+            counts["forward_skipped"],
+            email_forwarding_enabled,
+        )
 
     except Exception:
         logger.exception("Error connecting to IMAP")
