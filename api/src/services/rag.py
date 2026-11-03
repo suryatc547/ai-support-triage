@@ -14,6 +14,7 @@ from langchain_openai import ChatOpenAI
 from rank_bm25 import BM25Okapi
 
 from ..models import models
+from .pii_service import redact_emails, redact_pii
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,12 @@ KNOWLEDGE_BASE_DIR = Path(__file__).resolve().parent.parent / "knowledge_base"
 # Retry settings for transient 429 (rate limit) throttling on the primary provider.
 _PRIMARY_RETRIES = 3
 _PRIMARY_BACKOFF_SECONDS = 2.0
+
+# Remote providers are constructed with bounded request timeouts. A dead/broken
+# network must fail fast and fall through the chain — never hold the IMAP sync
+# session open on a single hung `llm.invoke` (which would also leave every
+# unprocessed mail un-read and re-hang on the next sync).
+_REMOTE_REQUEST_TIMEOUT_SECONDS = 45
 
 # Common English filler words that carry no routing signal. Filtering them out of
 # both the query and the index docs avoids spurious BM25 matches (e.g. a generic
@@ -142,10 +149,13 @@ Body: {body}
 --- AVAILABLE SUPPORT STAFF ---
 {user_context}
 
-Respond ONLY with a valid JSON object with exactly two keys:
+Respond ONLY with a valid JSON object with exactly four keys:
 - "category": a short lowercase string (e.g., "finance", "it_support", "hr",
   "security", "facilities")
 - "assignee_id": the integer ID of the best matched staff member, or null if no match
+- "confidence": a float between 0.0 and 1.0 representing your confidence in this
+  routing decision
+- "reasoning": a brief one-sentence explanation of your routing decision
 """
 
 _HUMAN_PROMPT = "Route the following support ticket. Return ONLY the JSON object."
@@ -157,7 +167,10 @@ def _get_primary_llm() -> LLMProvider | None:
     if not api_key:
         return None
     return ChatGoogleGenerativeAI(
-        model=os.environ.get("GEMINI_MODEL", "gemini-1.5-pro"), temperature=0
+        model=os.environ.get("GEMINI_MODEL", "gemini-1.5-pro"),
+        temperature=0,
+        timeout=_REMOTE_REQUEST_TIMEOUT_SECONDS,
+        max_retries=2,
     )
 
 
@@ -177,6 +190,8 @@ def _get_fallback_llms() -> list[LLMProvider]:
                 api_key=os.environ["OPENROUTER_API_KEY"],
                 base_url="https://openrouter.ai/api/v1",
                 temperature=0,
+                request_timeout=_REMOTE_REQUEST_TIMEOUT_SECONDS,
+                max_retries=2,
             )
         )
 
@@ -186,6 +201,8 @@ def _get_fallback_llms() -> list[LLMProvider]:
                 model=os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
                 api_key=os.environ["GROQ_API_KEY"],
                 temperature=0,
+                request_timeout=_REMOTE_REQUEST_TIMEOUT_SECONDS,
+                max_retries=2,
             )
         )
 
@@ -283,21 +300,38 @@ def _fallback_bm25(users, subject, body, threshold=1.0):
     rather than guessed into an arbitrary team.
     """
     if not users:
-        return {"category": "unclassified", "assignee_id": None}
+        return {
+            "category": "unclassified",
+            "assignee_id": None,
+            "confidence": 0.0,
+            "reasoning": "No support staff available",
+        }
 
     # Build an index of (text, assignee_id) entries from staff expertise plus
     # the knowledge_base policy docs (matched to a team via their contact email).
+    # Escalation-trigger sections are excluded: they describe when to route
+    # AWAY from the document's own team (e.g. IT's Escalation Triggers list
+    # "account hacked" / "phishing"), so indexing them under that team steals
+    # keyword matches from the real destination team.
     indexed: list[tuple[str, int]] = []
     for d in _build_user_docs(users):
         indexed.append((d.page_content, d.metadata["id"]))
     for pd in _load_knowledge_base_docs(users):
+        section = (pd.metadata or {}).get("section") or ""
+        if "escalation" in section.lower():
+            continue
         user = _match_kb_doc_to_user(users, pd)
         if user is not None:
             indexed.append((pd.page_content, user.id))
 
     tokenized = [_tokenize(text) for (text, _id) in indexed]
     if not tokenized:
-        return {"category": "unclassified", "assignee_id": None}
+        return {
+            "category": "unclassified",
+            "assignee_id": None,
+            "confidence": 0.0,
+            "reasoning": "Empty BM25 index",
+        }
 
     bm25 = BM25Okapi(tokenized)
     query = _tokenize(f"{subject}\n{body}")
@@ -305,16 +339,75 @@ def _fallback_bm25(users, subject, body, threshold=1.0):
 
     best_idx = max(range(len(scores)), key=lambda i: scores[i])
     if scores[best_idx] < threshold:
-        return {"category": "unclassified", "assignee_id": None}
+        return {
+            "category": "unclassified",
+            "assignee_id": None,
+            "confidence": 0.0,
+            "reasoning": f"Best BM25 score {scores[best_idx]:.2f} below threshold {threshold}",
+        }
 
-    return {"category": "general", "assignee_id": indexed[best_idx][1]}
+    # Aggregate the per-document scores by team (assignee id): a team's user doc
+    # and its own KB policy chunks are evidence *for* that team, not rivals.
+    # Routing ambiguity is between teams, so the calibration below compares the
+    # best team's score against the strongest *other* team.
+    team_scores: dict[int, float] = {}
+    for i, score in enumerate(scores):
+        team = indexed[i][1]
+        if score > team_scores.get(team, 0.0):
+            team_scores[team] = score
+
+    best_team, confidence = _team_routing_confidence(team_scores)
+
+    return {
+        "category": "general",
+        "assignee_id": best_team,
+        "confidence": round(confidence, 3),
+        "reasoning": f"BM25 keyword match (score {scores[best_idx]:.2f})",
+    }
+
+
+def _team_routing_confidence(team_scores: dict[int, float]) -> tuple[int, float]:
+    """Pick the best team and calibrate a [0, 1] routing confidence.
+
+    ``team_scores`` maps an assignee id to the strongest BM25 score across that
+    team's documents. Confidence is the ratio ``best / (best + runner_up)``
+    comparing the winning team against the strongest *other* team: one decisive
+    team maps to ``1.0``, two equally good teams map to ``0.5`` (below the
+    needs-review threshold — a coin flip must go to a human). Normalising by the
+    best score itself would always return ``1.0`` and carry no signal.
+    """
+    if not team_scores:
+        return 0, 0.0
+    best_team = max(team_scores, key=team_scores.get)
+    best = team_scores[best_team]
+    runner_up = max((s for t, s in team_scores.items() if t != best_team), default=0.0)
+    if runner_up <= 0:
+        return best_team, 1.0
+    return best_team, min(1.0, best / (best + runner_up))
 
 
 def _match_kb_doc_to_user(users, doc) -> models.User | None:
     """Link a knowledge_base routing policy doc to the matching support User.
 
-    Matches by department, team name, or contact email.
+    Matches by department, team name, or contact email. Section chunks produced
+    by :func:`_chunk_by_headings` carry their team breadcrumb in metadata, which
+    is consulted first so every chunk links to its team instead of only the
+    intro chunk.
     """
+    team = (doc.metadata or {}).get("team") or ""
+    dept = (doc.metadata or {}).get("department") or ""
+
+    if dept:
+        for u in users:
+            if (getattr(u, "department", None) or "").strip().lower() == dept.strip().lower():
+                return u
+    if team:
+        for u in users:
+            if (getattr(u, "name", None) or "").strip().lower() == team.strip().lower():
+                return u
+
+    # Fallback: regex over raw page_content (works for preamble/intro chunks
+    # that still carry the full ## Team / **Department** lines).
     dept_match = re.search(r"\*\*Department:\*\*\s*(.+)", doc.page_content, re.IGNORECASE)
     if dept_match:
         dept_name = dept_match.group(1).strip().lower()
@@ -338,15 +431,43 @@ def _match_kb_doc_to_user(users, doc) -> models.User | None:
     return None
 
 
+# Cache of loaded policy docs, invalidated whenever a KB file changes on disk
+# (mtime) or the resolved user email list changes. This eliminates per-ticket
+# disk I/O and file reads for the common, static case.
+_KB_DOCS_CACHE: dict = {"mtime": 0.0, "user_key": "", "docs": None}
+
+
+def _kb_docs_invalidated(mtime: float, user_key: str) -> bool:
+    """Return True when the cached KB docs no longer match the current inputs."""
+    cached = _KB_DOCS_CACHE["docs"]
+    return (
+        cached is None or _KB_DOCS_CACHE["mtime"] != mtime or _KB_DOCS_CACHE["user_key"] != user_key
+    )
+
+
 def _load_knowledge_base_docs(users: list | None = None) -> list[Document]:
     """Load all markdown routing policy documents from the knowledge_base directory.
 
     Replaces placeholder variables like `{{contact_email}}` with the matching
     department or team user's email directly from the database users list.
+
+    Results are cached between calls; the cache is invalidated when any KB file's
+    mtime changes or the resolved user -> email mapping changes. This avoids
+    re-reading and re-parsing static policy files for every ticket.
     """
     docs = []
     if not KNOWLEDGE_BASE_DIR.exists():
         return docs
+
+    files = [f for f in KNOWLEDGE_BASE_DIR.iterdir() if f.is_file()]
+    if not files:
+        return docs
+
+    user_key = ",".join(sorted(getattr(u, "email", "") or "" for u in users or []))
+    mtime = max(f.stat().st_mtime for f in files)
+
+    if not _kb_docs_invalidated(mtime, user_key):
+        return _KB_DOCS_CACHE["docs"]
 
     users_by_dept = {}
     users_by_team = {}
@@ -372,23 +493,82 @@ def _load_knowledge_base_docs(users: list | None = None) -> list[Document]:
 
         content = content.replace("{{contact_email}}", resolved_email)
 
-        docs.append(Document(page_content=content, metadata={"source": md_file.name}))
+        # Section-level chunking: split by markdown `## ` headings so BM25 and
+        # the LLM retrieve the specific relevant section (e.g. `## Escalation
+        # Triggers`) instead of a whole team policy file. The parent document
+        # team/department breadcrumbs are preserved in each chunk's metadata.
+        docs.extend(_chunk_by_headings(content, md_file.name, team_name, dept_name))
+
+    _KB_DOCS_CACHE["mtime"] = mtime
+    _KB_DOCS_CACHE["user_key"] = user_key
+    _KB_DOCS_CACHE["docs"] = docs
     return docs
+
+
+def _chunk_by_headings(content: str, source: str, team: str, dept: str = "") -> list[Document]:
+    """Split a markdown policy document into heading-delimited chunks.
+
+    A document like ``## Scope of Support`` / ``## Escalation Triggers`` /
+    ``## Keywords`` becomes multiple Documents, each tagged with the source file
+    and the team/department breadcrumbs so downstream retrieval can scope
+    matches precisely.
+    """
+    chunks: list[Document] = []
+    sections = re.split(r"(?m)^(##\s+.+)$", content)
+
+    # Retrieved via regex split: preamble runs before the first `## ` heading.
+    preamble = sections[0].strip() if sections and sections[0].strip() else ""
+    if preamble:
+        chunks.append(
+            Document(
+                page_content=preamble,
+                metadata={
+                    "source": source,
+                    "section": "preamble",
+                    "team": team,
+                    "department": dept,
+                },
+            )
+        )
+
+    # Header/body pairs (heading, body) — index from 1 so preamble is skipped.
+    for i in range(1, len(sections), 2):
+        heading = sections[i].strip()
+        body = sections[i + 1].strip() if i + 1 < len(sections) else ""
+        if not heading:
+            continue
+        chunk_text = f"{heading}\n{body}" if body else heading
+        chunks.append(
+            Document(
+                page_content=chunk_text,
+                metadata={
+                    "source": source,
+                    "section": heading,
+                    "team": team,
+                    "department": dept,
+                },
+            )
+        )
+    return chunks
 
 
 def _build_user_docs(users: list) -> list[Document]:
-    """Build BM25-indexable documents from User records using their expertise field."""
+    """Build BM25-indexable documents from User records using their expertise field.
+
+    Staff emails are deliberately omitted: these documents are rendered into the
+    remote LLM prompt (``user_context``), and routing only needs the ID/name.
+    """
     docs = []
     for u in users:
         expertise_text = u.expertise or f"Support for {u.department} inquiries."
-        content = (
-            f"Name: {u.name}\n"
-            f"Email: {u.email}\n"
-            f"Department: {u.department}\n"
-            f"Expertise: {expertise_text}"
-        )
+        content = f"Name: {u.name}\nDepartment: {u.department}\nExpertise: {expertise_text}"
         docs.append(Document(page_content=content, metadata={"id": u.id, "name": u.name}))
     return docs
+
+
+# Cache of tokenized BM25 corpora keyed by a content hash, so per-ticket
+# re-tokenization of the (cached) policy documents is skipped.
+_BM25_TOKEN_CACHE: dict[str, list] = {}
 
 
 def _bm25_search(docs: list[Document], query: str, k: int = 5) -> list[Document]:
@@ -399,6 +579,10 @@ def _bm25_search(docs: list[Document], query: str, k: int = 5) -> list[Document]
     shared with :func:`_fallback_bm25`, so stopword noise is filtered the same
     way in both paths. Documents with zero similarity are dropped so clearly
     unrelated mail does not inject noise into the LLM prompt context.
+
+    Tokenized corpora are memoized by a cheap content hash: the knowledge-base
+    documents come from :func:`_load_knowledge_base_docs`, which is itself
+    cached, so repeated queries over the same corpus avoid re-tokenization.
     """
     tokenized = [_tokenize(doc.page_content) for doc in docs]
     query_tokens = _tokenize(query)
@@ -406,11 +590,33 @@ def _bm25_search(docs: list[Document], query: str, k: int = 5) -> list[Document]
     if not tokenized or not query_tokens:
         return []
 
-    bm25 = BM25Okapi(tokenized)
+    corpus_key = hash(tuple(" ".join(toks) for toks in tokenized))
+    bm25 = _BM25_TOKEN_CACHE.get(corpus_key)
+    if bm25 is None:
+        bm25 = BM25Okapi(tokenized)
+        _BM25_TOKEN_CACHE[corpus_key] = bm25
+
     scores = bm25.get_scores(query_tokens)
 
     ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
     return [docs[i] for i in ranked[:k] if scores[i] > 0]
+
+
+# Below 0.70 confidence, a ticket is safe-fallback to human triage.
+_CONFIDENCE_NEEDS_REVIEW_THRESHOLD = 0.70
+
+# Categories the routing pipeline can actually assign. A model verdict outside
+# this set (e.g. "unclassified") means the model found no team fit — BM25 must
+# not be allowed to override that and invent one from thin keyword overlap.
+_KB_ROUTING_CATEGORIES = frozenset(
+    {
+        "it_support",
+        "finance_procurement",
+        "human_resources",
+        "security_compliance",
+        "facilities_admin",
+    }
+)
 
 
 def _clean_llm_result(result: dict, users: list) -> dict:
@@ -423,6 +629,10 @@ def _clean_llm_result(result: dict, users: list) -> dict:
     - ``category`` is coerced to a short lowercase string.
     - ``assignee_id`` is kept only when it is an integer that refers to a real
       support staff member; anything else becomes ``None`` (unassigned).
+    - ``confidence`` is coerced to a float in [0.0, 1.0]. When it is below
+      :data:`_CONFIDENCE_NEEDS_REVIEW_THRESHOLD`, the ticket is treated as
+      unassigned and marked ``needs_review`` for human triage.
+    - ``reasoning`` is coerced to a short string.
     """
     category = result.get("category")
     if not isinstance(category, str) or not category.strip():
@@ -440,7 +650,26 @@ def _clean_llm_result(result: dict, users: list) -> dict:
     if not is_valid_assignee:
         assignee_id = None
 
-    return {"category": category, "assignee_id": assignee_id}
+    confidence = result.get("confidence")
+    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
+        confidence = 0.0
+    confidence = max(0.0, min(float(confidence), 1.0))
+
+    reasoning = result.get("reasoning", "")
+    if not isinstance(reasoning, str):
+        reasoning = str(reasoning)
+    reasoning = reasoning.strip()[:500]
+
+    if confidence < _CONFIDENCE_NEEDS_REVIEW_THRESHOLD:
+        assignee_id = None
+        category = "needs_review"
+
+    return {
+        "category": category,
+        "assignee_id": assignee_id,
+        "confidence": confidence,
+        "reasoning": reasoning,
+    }
 
 
 def process_ticket_via_rag(
@@ -456,6 +685,8 @@ def process_ticket_via_rag(
     :return: A dict with keys:
         - category (str): Short ticket category label.
         - assignee_id (int | None): DB ID of the matched User, or None.
+        - confidence (float): Routing confidence 0.0–1.0.
+        - reasoning (str): LLM or BM25 rationale.
     """
     # 1. Load support staff from DB
     users = db.query(models.User).all()
@@ -463,9 +694,14 @@ def process_ticket_via_rag(
     # 2. Load routing policy documents from knowledge_base/
     policy_docs = _load_knowledge_base_docs(users)
 
-    # 3. Build BM25 retrieval context
+    # 3. PII redaction: scrub sensitive data before any remote LLM call.
+    #    Original unredacted text stays in the database.
+    redacted_subject = redact_pii(subject)
+    redacted_body = redact_pii(body)
+    query = f"{redacted_subject}\n{redacted_body}"
+
+    # 4. Build BM25 retrieval context
     user_docs = _build_user_docs(users) if users else []
-    query = f"{subject}\n{body}"
 
     if users:
         relevant_policy_docs = _bm25_search(policy_docs, query, k=3) if policy_docs else []
@@ -487,17 +723,23 @@ def process_ticket_via_rag(
         user_context = ""
         policy_context = ""
 
+    # KB docs resolve ``{{contact_email}}`` to a real staff address; that text
+    # goes to the remote provider, which only needs the routing policy. Strip
+    # addresses (and only addresses) so policy prose stays intact.
+    user_context = redact_emails(user_context)
+    policy_context = redact_emails(policy_context)
+
     providers = providers if providers is not None else select_llm()
     if not providers:
         logger.info("No LLM provider configured. Falling back to BM25 routing.")
-        return _fallback_bm25(users, subject, body)
+        return _fallback_bm25(users, redacted_subject, redacted_body)
 
     last_error = None
     for llm in providers:
         try:
             context_values = {
-                "subject": subject,
-                "body": body,
+                "subject": redacted_subject,
+                "body": redacted_body,
                 "policy_context": policy_context,
                 "user_context": user_context,
             }
@@ -516,7 +758,32 @@ def process_ticket_via_rag(
 
             result = json.loads(content)
             logger.info("%s: Success", provider_label(llm))
-            return _clean_llm_result(result, users)
+            raw_category = str(result.get("category") or "").strip().lower()[:50]
+            cleaned = _clean_llm_result(result, users)
+
+            # The local model's softmax confidence is systematically compressed
+            # (good matches commonly land in the 0.4–0.7 band), so a clean
+            # keyword routing can still be vetoed by the 0.70 needs-review gate.
+            # When the model is not confident enough to drive an assignment, let
+            # the deterministic BM25 router (staff expertise + KB policies)
+            # adjudicate before giving up. It only overrides when BOTH hold:
+            #  1. the model still named a routable team category (it found a
+            #     real signal, just could not express confidence in it), and
+            #  2. BM25's own routing confidence is itself decisive (>= 0.70).
+            # A ticket the model called "unclassified" — or that BM25 can only
+            # weakly split between two teams — is a genuine coin flip and must
+            # go to a human instead of being force-assigned.
+            if (
+                cleaned["confidence"] < _CONFIDENCE_NEEDS_REVIEW_THRESHOLD
+                and raw_category in _KB_ROUTING_CATEGORIES
+            ):
+                bm25_fallback = _fallback_bm25(users, redacted_subject, redacted_body)
+                if (
+                    bm25_fallback["assignee_id"] is not None
+                    and bm25_fallback["confidence"] >= _CONFIDENCE_NEEDS_REVIEW_THRESHOLD
+                ):
+                    return bm25_fallback
+            return cleaned
         except Exception as e:  # noqa: BLE001
             last_error = e
             logger.warning("%s: Failed - %s", provider_label(llm), e)
@@ -530,4 +797,9 @@ def process_ticket_via_rag(
             last_error,
         )
 
-    return {"category": "unclassified", "assignee_id": None}
+    return {
+        "category": "unclassified",
+        "assignee_id": None,
+        "confidence": 0.0,
+        "reasoning": "No LLM provider produced a result",
+    }

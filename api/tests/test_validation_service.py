@@ -68,6 +68,18 @@ def test_disposable_domain_quarantines():
     assert any(f.type == "disposable_domain" for f in result.findings)
 
 
+def test_yopmail_stays_on_the_disposable_blocklist():
+    """The shipped blocklist must not be weakened for test convenience.
+
+    Staff fixtures happen to use ``@yopmail.com`` addresses (as *recipients*,
+    which are never validated); inbound mail from that domain must still be
+    quarantined.
+    """
+    result = validate_email(make_message(sender="attacker@yopmail.com"))
+    assert result.verdict == "quarantine"
+    assert any(f.type == "disposable_domain" for f in result.findings)
+
+
 def test_spam_domain_quarantines():
     result = validate_email(make_message(sender="spam@spamgourmet.com"))
     assert result.verdict == "quarantine"

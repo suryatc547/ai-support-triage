@@ -279,6 +279,80 @@ def test_assignee_matching_is_order_independent():
     assert payload_first["assignee_id"] == payload_second["assignee_id"] == 2
 
 
+def test_local_model_routes_compromised_account_to_security():
+    """Account-compromise mail must honor the KB escalation rule (-> Security),
+    not the raw bag-of-words prediction (which favours IT on account/device
+    vocabulary). Update the escalation rule only if the shipped KB 'Escalation
+    Triggers' guidance changes.
+    """
+    from modelm.langchain_model import (
+        _SECURITY_ESCALATION_CONFIDENCE,
+        _apply_security_escalation,
+    )
+
+    subject = "Someone logged into my account from another city"
+    body = (
+        "I got a notification that my work account was accessed from a device in "
+        "Singapore at 2am, and I am in Delhi. I did not do this and I have not shared "
+        "my password. Please check whether my account has been breached."
+    )
+
+    cat, conf = _apply_security_escalation(subject, body, "it_support", 0.90)
+    assert cat == "security_compliance"
+    assert conf >= _SECURITY_ESCALATION_CONFIDENCE
+
+    model = LocalSupportChatModel()
+    prompt = [
+        (
+            "system",
+            (
+                "--- INCOMING TICKET ---\n"
+                f"Subject: {subject}\n"
+                f"Body: {body}\n\n"
+                "--- AVAILABLE SUPPORT STAFF ---\n"
+                "ID: 2, Name: IT Admin, Info: Hardware, VPN, WiFi\n"
+                "ID: 4, Name: Security Team, Info: security incidents, phishing\n"
+            ),
+        ),
+        ("human", "Route ticket"),
+    ]
+    payload = json.loads(model.invoke(prompt).content)
+    assert payload["category"] == "security_compliance"
+    assert payload["assignee_id"] == 4
+    assert payload["confidence"] >= 0.70
+
+
+def test_security_escalation_guard_is_scoped_to_compromise_phrasing():
+    """Low-precision triggers must not escalate: phishing-clicked style mail that
+    the model already places on security must not be force-escalated, and
+    innocent mail sharing account/device words must not fire the guard."""
+    from modelm.langchain_model import _apply_security_escalation
+
+    kept = _apply_security_escalation(
+        "I clicked a link in a suspicious email",
+        "An email said my documents were expiring and to log in immediately.",
+        "security_compliance",
+        0.51,
+    )
+    assert kept == ("security_compliance", 0.51)
+
+    innocent = _apply_security_escalation(
+        "Laptop switch",
+        "Please provide access to the new device from my account.",
+        "it_support",
+        0.80,
+    )
+    assert innocent == ("it_support", 0.80)
+
+
+def test_insufficient_content_is_held_for_human_review():
+    """A bare, information-free mail must not be auto-assigned on a weak margin."""
+    model = LocalSupportChatModel()
+    payload = json.loads(model.invoke("Subject: Help\n\nBody: help").content)
+    assert payload["category"] == "unclassified"
+    assert payload["assignee_id"] is None
+
+
 def test_temperature_scaling():
     """Verify temperature parameter softens logits when high and sharpens when low."""
     clf = CustomTicketClassifier(categories=["it_support", "hr"])

@@ -23,7 +23,7 @@ def _mock_user(**kwargs):
     defaults = {
         "id": 2,
         "name": "IT Admin",
-        "email": "it-admin@test.com",
+        "email": "it-admin-test@yopmail.com",
         "department": "IT Support",
     }
     defaults.update(kwargs)
@@ -39,13 +39,13 @@ def test_build_forward_message_headers_and_content():
 
     assert msg["Subject"] == "Fwd: [Ticket #42] Help with VPN connection"
     assert msg["From"] == "support-bot@example.com"
-    assert msg["To"] == "it-admin@test.com"
+    assert msg["To"] == "it-admin-test@yopmail.com"
     assert msg["Reply-To"] == "employee@example.com"
 
     content = msg.get_content()
     assert "Ticket ID   : #42" in content
     assert "Department  : IT Support" in content
-    assert "Assigned To : IT Admin <it-admin@test.com>" in content
+    assert "Assigned To : IT Admin <it-admin-test@yopmail.com>" in content
     assert "Category    : it_support" in content
     assert "I cannot connect to the company VPN since morning." in content
 
@@ -103,7 +103,7 @@ def test_forward_ticket_email_starttls_success(monkeypatch):
         mock_server.login.assert_called_once_with("support@gmail.com", "secret-password")
         mock_server.send_message.assert_called_once()
         sent_msg = mock_server.send_message.call_args[0][0]
-        assert sent_msg["To"] == "it-admin@test.com"
+        assert sent_msg["To"] == "it-admin-test@yopmail.com"
 
 
 def test_forward_ticket_email_ssl_success(monkeypatch):

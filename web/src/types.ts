@@ -4,6 +4,12 @@ export interface Assignee {
   email: string;
 }
 
+export interface User {
+  id: number;
+  name: string;
+  department: string | null;
+}
+
 export interface ValidationFinding {
   type: string;
   severity: string;

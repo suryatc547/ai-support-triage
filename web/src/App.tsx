@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import './index.css'
+import { apiFetch } from './api'
 import { TicketCard } from './components/TicketCard/TicketCard'
 import { TicketList } from './components/TicketList/TicketList'
 import { ViewToggle, type ViewMode } from './components/ViewToggle/ViewToggle'
@@ -14,10 +15,6 @@ const MIN_LOADER_MS = 250;
 // How long to wait after triggering a background sync before re-fetching, and
 // how long to keep the Sync button in its "syncing" state.
 const SYNC_REFRESH_MS = 3000;
-// Attach the API key to every request when the backend has auth enabled
-// (set VITE_API_KEY to match the server's API_KEY / API_KEYS).
-const apiKey = import.meta.env.VITE_API_KEY as string | undefined;
-const authHeaders: HeadersInit = apiKey ? { 'X-API-Key': apiKey } : {};
 
 function App() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -53,17 +50,11 @@ function App() {
         if (security && security !== 'all') {
           params.set('security', security);
         }
-        const response = await fetch(`/api/tickets?${params.toString()}`, {
-          headers: authHeaders,
-        });
-        if (!response.ok) {
-          throw new Error(`Failed to load tickets (status ${response.status})`);
-        }
-        const data: TicketPage = await response.json();
+        const response = await apiFetch<TicketPage>(`/api/tickets?${params.toString()}`);
         if (isMounted) {
-          setTickets(data.items);
-          setTotal(data.total);
-          setPages(data.pages);
+          setTickets(response.items);
+          setTotal(response.total);
+          setPages(response.pages);
           setError(null);
         }
       } catch (e) {
@@ -103,11 +94,7 @@ function App() {
   const triggerSync = async () => {
     setSyncing(true);
     try {
-      const response = await fetch('/api/sync', { method: 'POST', headers: authHeaders });
-      if (!response.ok) {
-        console.error('Sync failed with status', response.status);
-        return;
-      }
+      await apiFetch('/api/sync', { method: 'POST' });
       // Re-fetch after the background sync has had time to process.
       setTimeout(() => setReloadKey((k) => k + 1), SYNC_REFRESH_MS);
     } catch (e) {
@@ -119,6 +106,11 @@ function App() {
 
   const from = total === 0 ? 0 : (page - 1) * limit + 1;
   const to = Math.min(page * limit, total);
+
+  const handleTicketUpdated = (updated: Ticket) => {
+    setSelectedTicket(updated);
+    setTickets((current) => current.map((t) => (t.id === updated.id ? updated : t)));
+  };
 
   return (
     <div className="dashboard">
@@ -202,7 +194,11 @@ function App() {
       )}
 
       {selectedTicket && (
-        <TicketDetail ticket={selectedTicket} onClose={() => setSelectedTicket(null)} />
+        <TicketDetail
+          ticket={selectedTicket}
+          onClose={() => setSelectedTicket(null)}
+          onUpdated={handleTicketUpdated}
+        />
       )}
     </div>
   )

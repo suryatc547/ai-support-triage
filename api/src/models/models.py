@@ -45,3 +45,23 @@ class Ticket(Base):
     created_at = Column(DateTime, default=_utcnow)
 
     assignee = relationship("User", back_populates="tickets")
+    audit_logs = relationship(
+        "TicketAuditLog", back_populates="ticket", cascade="all, delete-orphan"
+    )
+
+
+class TicketAuditLog(Base):
+    __tablename__ = "ticket_audit_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ticket_id = Column(
+        Integer, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    event_type = Column(
+        String, nullable=False, index=True
+    )  # created/quarantined/classified/needs_review/forwarded/agent_trajectory/resolved
+    actor = Column(String, nullable=False)  # 'system/imap', 'system/rag', 'system/smtp', 'user/1'
+    details = Column(Text, nullable=True)  # JSON-encoded metadata/state changes
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+
+    ticket = relationship("Ticket", back_populates="audit_logs")

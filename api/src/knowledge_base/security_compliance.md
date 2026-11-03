@@ -8,8 +8,8 @@
 
 Route any ticket to the Security Team when the email contains topics related to:
 
-- **Security Incidents**: Suspected data breaches, ransomware, malware infections, account takeovers.
-- **Unauthorized Access**: Reports of someone accessing systems or data without permission.
+- **Security Incidents**: Suspected data breaches, ransomware, malware infections, account takeovers, credential compromise (someone else logging in, accounts accessed from unknown locations/devices, password or MFA changed without the user's knowledge).
+- **Unauthorized Access**: Reports of someone accessing systems or data without permission, unauthorized sign-ins or unusual login activity.
 - **Phishing**: Suspicious emails, phishing links, social engineering attempts.
 - **Access Revocation**: Emergency revocation of employee access (e.g., termination, security incident).
 - **Compliance Requests**: GDPR data subject requests, audit evidence gathering, regulatory compliance queries.

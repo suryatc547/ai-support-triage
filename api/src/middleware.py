@@ -24,6 +24,22 @@ def _header_value(scope: Scope, name: bytes) -> str | None:
     return None
 
 
+def _keys_match(provided: str, keys: tuple[str, ...]) -> bool:
+    """Constant-time compare ``provided`` against every configured key.
+
+    - Encodes both sides to bytes: ``secrets.compare_digest`` raises
+      ``TypeError`` for non-ASCII *str* input, so a crafted header must yield a
+      clean 401 instead of a 500.
+    - Never short-circuits, so the number of comparisons (and the timing signal)
+      does not depend on which key matched.
+    """
+    candidate = provided.encode("utf-8", "replace")
+    matched = False
+    for key in keys:
+        matched |= secrets.compare_digest(candidate, key.encode("utf-8"))
+    return matched
+
+
 class TraceIdMiddleware:
     """Assign a trace ID to every HTTP request and correlate its log lines.
 
@@ -96,9 +112,7 @@ class APIKeyMiddleware:
             return
 
         provided = _header_value(scope, b"x-api-key")
-        if provided is not None and any(
-            secrets.compare_digest(provided, key) for key in self._keys
-        ):
+        if provided is not None and _keys_match(provided, self._keys):
             await self.app(scope, receive, send)
             return
 

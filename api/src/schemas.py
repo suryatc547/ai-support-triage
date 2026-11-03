@@ -58,3 +58,13 @@ class UserOut(BaseModel):
     id: int
     name: str
     department: str | None = None
+
+
+class TicketAssignIn(BaseModel):
+    """Request body for manually assigning (or unassigning) a ticket.
+
+    ``assignee_id`` is nullable so the same endpoint can clear an assignment by
+    sending ``null``.
+    """
+
+    assignee_id: int | None = None

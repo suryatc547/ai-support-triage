@@ -1,13 +1,15 @@
 import json
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..models import database, models
-from ..schemas import TicketPageOut, UserOut
+from ..schemas import TicketAssignIn, TicketOut, TicketPageOut, UserOut
+from ..services.audit_service import record_audit_event
 from ..services.imap_service import fetch_and_process_emails
+from ..services.rag import process_ticket_via_rag
 
 router = APIRouter()
 
@@ -114,3 +116,86 @@ def trigger_sync(background_tasks: BackgroundTasks, db: DbSession):
     # Trigger an IMAP sync via background task
     background_tasks.add_task(fetch_and_process_emails)
     return {"message": "Email sync triggered in background"}
+
+
+def _get_ticket_or_404(db: Session, ticket_id: int) -> models.Ticket:
+    ticket = db.query(models.Ticket).filter(models.Ticket.id == ticket_id).first()
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    return ticket
+
+
+@router.post("/api/tickets/{ticket_id}/assign", response_model=TicketOut)
+def assign_ticket(ticket_id: int, payload: TicketAssignIn, db: DbSession):
+    """Manually assign (or unassign) a ticket to a support staff member.
+
+    Only a human triggers this endpoint — unlike the RAG pipeline it overrides
+    the ``needs_review`` guard explicitly. Assigning ``null`` clears the
+    assignment.
+    """
+    ticket = _get_ticket_or_404(db, ticket_id)
+
+    if payload.assignee_id is not None:
+        assignee = db.query(models.User).filter(models.User.id == payload.assignee_id).first()
+        if assignee is None:
+            raise HTTPException(status_code=404, detail="Assignee not found")
+    else:
+        assignee = None
+
+    previous = ticket.assigned_to
+    ticket.assigned_to = payload.assignee_id
+    record_audit_event(
+        db,
+        ticket.id,
+        "reassigned",
+        "system/manual",
+        {
+            "from": previous,
+            "to": payload.assignee_id,
+            "assignee_name": assignee.name if assignee else None,
+        },
+    )
+    db.commit()
+    db.refresh(ticket)
+    return _serialize_ticket(ticket)
+
+
+@router.post("/api/tickets/{ticket_id}/reanalyze", response_model=TicketOut)
+def reanalyze_ticket(ticket_id: int, db: DbSession):
+    """Re-run the RAG classifier over a stored ticket's subject/body.
+
+    Updates ``ticket_type`` and, when the analysis is decisive, the assignee.
+    Quarantined tickets are never auto-assigned, even by a fresh analysis — the
+    guardrail deliberately leaves those to a human.
+    """
+    ticket = _get_ticket_or_404(db, ticket_id)
+
+    result = process_ticket_via_rag(ticket.subject, ticket.body, db)
+    quarantined = ticket.security_flag == "quarantined"
+
+    new_category = result["category"]
+    new_assignee = None if quarantined else result["assignee_id"]
+    previous = ticket.assigned_to
+
+    ticket.ticket_type = new_category
+    ticket.assigned_to = new_assignee
+
+    event_type = "classified" if new_assignee is not None else "needs_review"
+    record_audit_event(
+        db,
+        ticket.id,
+        event_type,
+        "system/manual",
+        {
+            "method": "reanalyze",
+            "from_assignee_id": previous,
+            "assignee_id": new_assignee,
+            "category": new_category,
+            "confidence": result["confidence"],
+            "reasoning": result["reasoning"],
+            "quarantined": quarantined,
+        },
+    )
+    db.commit()
+    db.refresh(ticket)
+    return _serialize_ticket(ticket)

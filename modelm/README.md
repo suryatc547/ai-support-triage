@@ -60,7 +60,12 @@ modelm/
 ### 3. LangChain Adapter (`langchain_model.py`)
 - Extends `BaseChatModel` from `langchain_core`.
 - Parses incoming message histories (e.g., System prompt containing candidate staff and Knowledge Base context, plus Human prompt containing email subject and body).
-- Runs local inference, extracts top predicted category, maps candidate staff from the RAG prompt to find the appropriate `assignee_id`, and formats the output into strict JSON.
+- Runs local inference, extracts top predicted category, and maps candidate staff from the RAG prompt to find the appropriate `assignee_id`.
+- Emits a strict JSON payload that satisfies the shared routing schema used by
+  `rag.py`'s sanitizer — `category`, `assignee_id`, and a real `confidence` value
+  plus a `reasoning` string. At or below `confidence_threshold` (default `0.40`)
+  it returns `unclassified` so the caller's 0.70 review gate never auto-assigns a
+  weak prediction.
 
 ---
 
@@ -110,9 +115,9 @@ print(response.content)
 # Output:
 # {
 #   "category": "it_support",
+#   "assignee_id": 1,
 #   "confidence": 0.96,
-#   "reasoning": "Local model classified ticket into 'it_support' (confidence: 96%). Matched department staff: Sarah Jenkins.",
-#   "assignee_id": 1
+#   "reasoning": "Local model classified into 'it_support' (confidence: 96.0%)"
 # }
 ```
 
@@ -122,13 +127,14 @@ print(response.content)
 from modelm.model import CustomTicketClassifier
 
 classifier = CustomTicketClassifier.load("modelm/weights.json")
-category, confidence, scores = classifier.predict(
-    "My salary direct deposit was not credited this month."
-)
+category, confidence = classifier.predict("My salary direct deposit was not credited this month.")
 
 print(f"Predicted Category: {category} ({confidence * 100:.1f}%)")
 # Predicted Category: finance_procurement (94.2%)
 ```
+
+For the per-class probability vector, use `classifier.predict_proba(text)` which
+returns `{category: probability, ...}`.
 
 ---
 

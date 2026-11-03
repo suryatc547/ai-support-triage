@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.configs.config import _parse_api_keys
-from src.middleware import APIKeyMiddleware
+from src.middleware import APIKeyMiddleware, _keys_match
 
 
 def test_parse_api_keys_splits_and_trims():
@@ -64,6 +64,19 @@ def test_valid_key_accepted(protected_app):
     with TestClient(protected_app) as client:
         response = client.get("/api/users", headers={"X-API-Key": "secret-2"})
     assert response.status_code == 200
+
+
+def test_every_configured_key_is_checked():
+    keys = ("secret-1", "secret-2", "secret-3")
+    for key in keys:
+        assert _keys_match(key, keys) is True
+    assert _keys_match("nope", keys) is False
+
+
+def test_non_ascii_key_is_rejected_without_raising():
+    # ``compare_digest`` raises TypeError on non-ASCII *str* input; a crafted
+    # header must produce a clean 401 rather than a 500.
+    assert _keys_match("sécrét-☃", ("secret-1", "secret-2")) is False
 
 
 def test_exempt_paths_require_no_key(protected_app):

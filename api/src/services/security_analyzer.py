@@ -16,6 +16,7 @@ import json
 import logging
 
 from . import rag
+from .pii_service import redact_pii
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +52,17 @@ def analyze_suspicious(
         logger.debug("No LLM provider configured; skipping LLM security refinement")
         return False
 
+    # PII redaction: strip sensitive data before any remote LLM call.
+    # The original unredacted text stays in the database.
+    redacted_subject = redact_pii(subject)
+    redacted_body = redact_pii(body)
+    redacted_sender = redact_pii(sender_email)
+
     messages = [
         ("system", _refine_prompt()),
         (
             "human",
-            f"Subject: {subject}\nSender: {sender_email}\n\n{body}",
+            f"Subject: {redacted_subject}\nSender: {redacted_sender}\n\n{redacted_body}",
         ),
     ]
 

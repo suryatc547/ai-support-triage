@@ -112,16 +112,17 @@ def forward_ticket_email(ticket: models.Ticket, assignee: models.User) -> bool:
             port,
         )
         return True
-    except Exception:
-        # Non-fatal by design: do not dump a traceback for every failed forward —
-        # a compact warning keeps sync logs readable while the per-run summary in
-        # imap_service still surfaces the aggregate failure count.
+    except Exception as exc:
+        # Non-fatal by design: do not dump a full traceback for every failed forward —
+        # a compact warning with the exception reason keeps sync logs actionable and readable
+        # while the per-run summary in imap_service surfaces aggregate failure counts.
         logger.warning(
-            "Failed to forward ticket #%s to %s <%s> via SMTP (%s:%s)",
+            "Failed to forward ticket #%s to %s <%s> via SMTP (%s:%s): %s",
             ticket.id,
             assignee.name,
             assignee.email,
             host,
             port,
+            exc,
         )
         return False

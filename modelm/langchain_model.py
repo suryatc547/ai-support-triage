@@ -40,6 +40,72 @@ def _name_tokens(text: str) -> set[str]:
     return set(re.findall(r"\b[a-z0-9_-]+\b", (text or "").lower()))
 
 
+# Deterministic escalation rule mirroring the shipped knowledge-base routing
+# policy: the IT doc's "Escalation Triggers" section states that tickets about
+# account compromise ("someone else logged in", "suspicious login", "account
+# hacked", "unauthorized sign-in", "phishing") must route to the Security Team.
+# A bag-of-words classifier cannot express those multi-word relationships, so we
+# honor the KB directive directly. The guard fires only on explicit
+# compromise / unauthorized-access phrasing (never bare substrings), raising the
+# category to "security_compliance" with a decisive confidence.
+_SECURITY_ESCALATION_PATTERNS = [
+    r"\bsomeone else logged in\b",
+    r"\blogged into my account\b",
+    r"\baccount was accessed\b",
+    r"\bunauthorized access\b",
+    r"\baccount hacked\b",
+    r"\bsuspicious login\b",
+    r"\bunusual login\b",
+    r"\bfrom another (city|country|location|device|ip)\b",
+    r"\bdid not (do|authorize) this\b",
+    r"\b(unrecognized|unfamiliar|unknown) device\b",
+    r"\baccount takeover\b",
+]
+_SECURITY_ESCALATION_CONFIDENCE = 0.82
+# Breach phrases only count when they clearly concern an account/login, keeping
+# innocent mail about e.g. a data leak elsewhere out of scope.
+_SECURITY_BREACH_REQUIRED = ("account", "login", "password", "credential", "sign")
+
+# Mail with fewer than two distinct meaningful word tokens carries no routing
+# evidence (e.g. a bare "help"). Never auto-assign it: hold for human review
+# instead of letting a weak softmax margin pick a department.
+_MIN_CONTENT_TOKENS = 2
+
+
+def _content_token_count(text: str) -> int:
+    """Count distinct word tokens, ignoring trivial one-letter noise."""
+    return len({t for t in re.findall(r"\b[a-z0-9]+\b", (text or "").lower()) if len(t) >= 2})
+
+
+def _apply_security_escalation(
+    subject: str, body: str, category: str, confidence: float
+) -> tuple[str, float]:
+    """Enforce the KB escalation rule for explicit account-compromise mail.
+
+    The knowledge-base routing policy is unambiguous: reports of someone
+    else logging in, suspicious logins, hacked accounts, or unauthorized
+    access go to the Security Team. The linear local classifier may still
+    land such mail on IT (shared account/device vocabulary), so we honor the
+    documented rule deterministically instead of trusting the softmax.
+
+    Returns the (category, confidence) to use, possibly overridden.
+    """
+    text = f"{subject}\n{body}".lower()
+    if not text.strip():
+        return category, confidence
+
+    for pattern in _SECURITY_ESCALATION_PATTERNS:
+        if re.search(pattern, text):
+            return "security_compliance", max(confidence, _SECURITY_ESCALATION_CONFIDENCE)
+
+    if ("breached" in text or "compromised" in text) and any(
+        token in text for token in _SECURITY_BREACH_REQUIRED
+    ):
+        return "security_compliance", max(confidence, _SECURITY_ESCALATION_CONFIDENCE)
+
+    return category, confidence
+
+
 class LocalSupportChatModel(BaseChatModel):
     """A native LangChain ChatModel powered by our custom local model.
 
@@ -161,32 +227,6 @@ class LocalSupportChatModel(BaseChatModel):
         if best is not None and match_score(best) > 0:
             return best["id"]
 
-        # Fallback query to SQLite database if available
-        try:
-            from api.src.models.database import SessionLocal
-            from api.src.models.models import User
-
-            db = SessionLocal()
-            try:
-                best_user = None
-                best_rank = 0
-                for u in db.query(User).all():
-                    rank = match_score(
-                        {
-                            "name": (u.name or "").lower(),
-                            "dept": (u.department or "").lower(),
-                        }
-                    )
-                    if rank > best_rank:
-                        best_rank = rank
-                        best_user = u
-                if best_user is not None:
-                    return best_user.id
-            finally:
-                db.close()
-        except (ImportError, RuntimeError, OSError) as e:
-            logger.debug("DB fallback lookup skipped: %s", e)
-
         return None
 
     def _generate(
@@ -203,6 +243,12 @@ class LocalSupportChatModel(BaseChatModel):
         query = f"{subject}\n{body}".strip()
 
         category, confidence = self._classifier.predict(query, temperature=self.temperature)
+        category, confidence = _apply_security_escalation(subject, body, category, confidence)
+
+        # Insufficient content cannot sustain a routing decision: hold for a
+        # human. (A guard-driven security escalation above always wins.)
+        if category != "security_compliance" and _content_token_count(query) < _MIN_CONTENT_TOKENS:
+            category, confidence = "unclassified", 0.0
 
         if confidence < self.confidence_threshold:
             category = "unclassified"
@@ -213,6 +259,10 @@ class LocalSupportChatModel(BaseChatModel):
         payload = {
             "category": category,
             "assignee_id": assignee_id,
+            "confidence": round(confidence, 3),
+            "reasoning": (
+                f"Local model classified into '{category}' (confidence: {confidence:.1%})"
+            ),
         }
         json_output = json.dumps(payload)
 

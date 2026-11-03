@@ -9,7 +9,7 @@ from ..models.models import User
 SUPPORT_STAFF = [
     {
         "name": "Admin Team",
-        "email": "admin@test.com",
+        "email": "admin-test@yopmail.com",
         "department": "Finance & Procurement",
         "expertise": (
             "Purchase orders, invoice approvals, vendor payments, expense reimbursements, "
@@ -19,7 +19,7 @@ SUPPORT_STAFF = [
     },
     {
         "name": "IT Admin",
-        "email": "it-admin@test.com",
+        "email": "it-admin-test@yopmail.com",
         "department": "IT Support",
         "expertise": (
             "Hardware requests, laptop setup, software installation, VPN issues, "
@@ -30,7 +30,7 @@ SUPPORT_STAFF = [
     },
     {
         "name": "HR Team",
-        "email": "hr@test.com",
+        "email": "hr-test@yopmail.com",
         "department": "Human Resources",
         "expertise": (
             "Employee onboarding, welcome kits, onboarding parcels, courier delivery damages, "
@@ -42,7 +42,7 @@ SUPPORT_STAFF = [
     },
     {
         "name": "Security Team",
-        "email": "security@test.com",
+        "email": "security-test@yopmail.com",
         "department": "Security & Compliance",
         "expertise": (
             "Data breach reports, unauthorized access, suspicious activity, account compromise, "
@@ -53,7 +53,7 @@ SUPPORT_STAFF = [
     },
     {
         "name": "Facilities Team",
-        "email": "facilities@test.com",
+        "email": "facilities-test@yopmail.com",
         "department": "Facilities & Admin",
         "expertise": (
             "Office access cards, building entry, desk booking, hot desking, "

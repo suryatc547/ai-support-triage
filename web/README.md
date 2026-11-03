@@ -38,7 +38,11 @@ pnpm build
 
 ## 🔐 API Key
 
-If the backend has API authentication enabled (`API_KEY` in its env), set
-`VITE_API_KEY` in `web/.env` to the same value and the app will attach an
-`X-API-Key` header to every request automatically. Without it the app talks to
-the backend anonymously (fine when the backend runs without an API key).
+If the backend has API authentication enabled (`API_KEY` in its env), the app
+still works with `pnpm dev`: the Vite dev-server proxy reads the repo-root
+`.env` (or the shell environment) and injects the `X-API-Key` header
+server-side, so the key never enters the browser bundle.
+
+For a production build, serve `dist/` behind a reverse proxy / API gateway that
+adds the same `X-API-Key` header for `/api/*` requests. There is deliberately no
+`VITE_API_KEY`: any value compiled into the client is public.
